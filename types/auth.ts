@@ -29,6 +29,10 @@ export interface LogoutResponse {
   message: string;
 }
 
+export interface RefreshResponse {
+  message: string;
+}
+
 export interface ApiValidationError {
   message?: string | string[];
   errors?: Record<string, string | string[]> | string[] | string;

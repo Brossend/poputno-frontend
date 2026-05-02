@@ -1,0 +1,21 @@
+
+> dev
+> nuxt dev --port 3001
+
+|
+•  [32mNuxt [1m4.4.2[22m[39m[90m (with [39m[90mNitro [1m2.13.3[22m[39m[90m, Vite [1m7.3.2[22m[39m[90m and Vue [1m3.5.33[22m[39m[90m)[39m
+
+[32m  ➜ Local:   [39m [36m[4mhttp://localhost:[1m3001[22m/[24m[39m
+[90m  ➜ Network:  use [37m--host[90m to expose[39m
+
+[33m  ➜ DevTools: [39m[2mpress [22m[32mShift[39m[2m + [22m[32mAlt[39m[2m + [22m[32mD[39m[2m in the browser (v3.2.4)[22m
+
+[32m√[39m Vite client built in 67ms
+[32m√[39m Vite server built in 174ms
+[90m[[90mnitro[90m][39m [32m√[39m Nuxt Nitro server built in 2363ms
+[36mi[39m Vite server warmed up in 2ms
+[36mi[39m Vite client warmed up in 5ms
+[90m[[90mnitro[90m][39m [32m√[39m Nuxt Nitro server built in 1872ms
+[90m[[90mnitro[90m][39m [32m√[39m Nuxt Nitro server built in 3124ms
+[90m[[90mnitro[90m][39m [32m√[39m Nuxt Nitro server built in 1844ms
+[90m[[90mnitro[90m][39m [32m√[39m Nuxt Nitro server built in 1748ms

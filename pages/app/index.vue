@@ -5,5 +5,7 @@
 </template>
 
 <script setup lang="ts">
-await navigateTo('/app/trips', { replace: true });
+definePageMeta({
+  layout: 'app',
+});
 </script>

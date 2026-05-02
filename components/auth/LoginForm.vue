@@ -48,9 +48,11 @@ import AuthPasswordField from '~/components/auth/AuthPasswordField.vue';
 import AuthSubmitButton from '~/components/auth/AuthSubmitButton.vue';
 import { useAuthStore } from '~/stores/auth';
 import type { LoginPayload } from '~/types/auth';
+import { resolveInternalRedirect } from '~/utils/navigation';
 
 const authStore = useAuthStore();
 const { error: authError, isLoading } = storeToRefs(authStore);
+const route = useRoute();
 
 const form = reactive<LoginPayload>({
   email: '',
@@ -87,7 +89,7 @@ const handleSubmit = async () => {
   const response = await authStore.login({ ...form });
 
   if (response) {
-    await navigateTo('/home');
+    await navigateTo(resolveInternalRedirect(route.query.redirect), { replace: true });
   }
 };
 </script>

@@ -65,9 +65,11 @@ import AuthPasswordField from '~/components/auth/AuthPasswordField.vue';
 import AuthSubmitButton from '~/components/auth/AuthSubmitButton.vue';
 import { useAuthStore } from '~/stores/auth';
 import type { RegisterPayload } from '~/types/auth';
+import { resolveInternalRedirect } from '~/utils/navigation';
 
 const authStore = useAuthStore();
 const { error: authError, isLoading } = storeToRefs(authStore);
+const route = useRoute();
 
 const form = reactive<RegisterPayload>({
   name: '',
@@ -116,7 +118,7 @@ const handleSubmit = async () => {
   const response = await authStore.register({ ...form });
 
   if (response) {
-    await navigateTo('/home');
+    await navigateTo(resolveInternalRedirect(route.query.redirect), { replace: true });
   }
 };
 </script>
