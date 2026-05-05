@@ -88,13 +88,6 @@
     </div>
 
     <div
-      v-else-if="routeWarningMessageForMode"
-      class="rounded-[28px] border border-amber-200 bg-amber-50 px-5 py-4 text-sm leading-6 text-amber-900"
-    >
-      {{ routeWarningMessageForMode }}
-    </div>
-
-    <div
       v-if="routeSummary"
       class="rounded-[28px] border border-blue-100 bg-gradient-to-r from-blue-50 via-white to-sky-50 px-5 py-5 shadow-[0_18px_45px_rgba(37,99,235,0.08)]"
     >
