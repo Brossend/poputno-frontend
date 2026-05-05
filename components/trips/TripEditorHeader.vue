@@ -27,6 +27,26 @@
 
       <div class="w-full lg:min-w-[420px] lg:max-w-[560px]">
         <div class="flex flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:justify-end">
+          <div class="flex items-center rounded-2xl border border-slate-200 bg-white p-1 shadow-sm">
+            <button
+              type="button"
+              class="inline-flex h-9 items-center justify-center rounded-xl px-3 text-sm font-semibold transition"
+              :class="routeMode === 'walking' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'"
+              @click="emit('update:route-mode', 'walking')"
+            >
+              Пеший
+            </button>
+
+            <button
+              type="button"
+              class="inline-flex h-9 items-center justify-center rounded-xl px-3 text-sm font-semibold transition"
+              :class="routeMode === 'driving' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'"
+              @click="emit('update:route-mode', 'driving')"
+            >
+              Авто
+            </button>
+          </div>
+
           <button
             type="button"
             class="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
@@ -107,6 +127,7 @@ interface Props {
   trip: Trip | null;
   placesCount: number;
   daysCount: number;
+  routeMode: 'driving' | 'walking';
   canBuildRoute: boolean;
   isBuildingRoute: boolean;
   canOpenSettings: boolean;
@@ -119,6 +140,7 @@ const emit = defineEmits<{
   (event: 'build-route'): void;
   (event: 'open-settings'): void;
   (event: 'share-trip'): void;
+  (event: 'update:route-mode', value: 'driving' | 'walking'): void;
 }>();
 
 const dateFormatter = new Intl.DateTimeFormat('ru-RU', {

@@ -40,6 +40,8 @@ const PLACE_CATEGORIES: PlaceCategory[] = [
   'shopping',
   'other',
 ];
+const PLACES_STORAGE_KEY = 'poputno.places';
+const PLACES_REQUEST_TIMEOUT_MS = 3000;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => (
   Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -211,6 +213,60 @@ export const usePlacesStore = defineStore('places', () => {
     error.value = null;
   };
 
+  const canUseStorage = () => import.meta.client && typeof window !== 'undefined';
+
+  const readStoredPlaces = (): Place[] => {
+    if (!canUseStorage()) {
+      return [];
+    }
+
+    try {
+      const rawValue = window.localStorage.getItem(PLACES_STORAGE_KEY);
+
+      if (!rawValue) {
+        return [];
+      }
+
+      const parsedValue = JSON.parse(rawValue);
+
+      if (!Array.isArray(parsedValue)) {
+        return [];
+      }
+
+      return sortPlaces(
+        parsedValue
+          .map(normalizePlace)
+          .filter((item): item is Place => item !== null),
+      );
+    } catch {
+      return [];
+    }
+  };
+
+  const writeStoredPlaces = (nextPlaces: Place[]) => {
+    if (!canUseStorage()) {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(PLACES_STORAGE_KEY, JSON.stringify(sortPlaces(nextPlaces)));
+    } catch {
+      // Ignore storage errors and keep the app usable.
+    }
+  };
+
+  const upsertStoredPlacesForTrip = (tripId: string, nextPlaces: Place[]) => {
+    const storedPlaces = readStoredPlaces().filter((place) => place.trip_uuid !== tripId);
+    writeStoredPlaces([...storedPlaces, ...sortPlaces(nextPlaces)]);
+  };
+
+  const applyStoredPlacesByTrip = (tripId: string) => {
+    const storedPlaces = readStoredPlaces().filter((place) => place.trip_uuid === tripId);
+    applyPlaces(storedPlaces);
+
+    return storedPlaces;
+  };
+
   const selectPlace = (placeId: string | null) => {
     selectedPlaceId.value = placeId;
   };
@@ -227,11 +283,26 @@ export const usePlacesStore = defineStore('places', () => {
     const response = await apiFetch<PlaceListResponse>(`/trips/${encodeURIComponent(tripId)}/places`, {
       method: 'GET',
       query: day ? { day } : undefined,
+      timeout: PLACES_REQUEST_TIMEOUT_MS,
     });
 
     const normalizedPlaces = extractPlaceList(response);
-    applyPlaces(normalizedPlaces);
 
+    if (!day) {
+      const storedPlaces = readStoredPlaces().filter((place) => place.trip_uuid === tripId);
+
+      if (!normalizedPlaces.length && storedPlaces.length) {
+        applyPlaces(storedPlaces);
+        return storedPlaces;
+      }
+
+      applyPlaces(normalizedPlaces);
+      upsertStoredPlacesForTrip(tripId, normalizedPlaces);
+
+      return normalizedPlaces;
+    }
+
+    applyPlaces(normalizedPlaces);
     return normalizedPlaces;
   };
 
@@ -239,9 +310,26 @@ export const usePlacesStore = defineStore('places', () => {
     isLoading.value = true;
     clearError();
 
+    if (!day) {
+      const storedPlaces = applyStoredPlacesByTrip(tripId);
+
+      if (storedPlaces.length) {
+        error.value = null;
+      }
+    }
+
     try {
       return await requestPlaces(tripId, day);
     } catch (requestError) {
+      if (!day) {
+        const storedPlaces = applyStoredPlacesByTrip(tripId);
+
+        if (storedPlaces.length) {
+          error.value = null;
+          return storedPlaces;
+        }
+      }
+
       places.value = [];
       selectedPlaceId.value = null;
       error.value = getPlacesErrorMessage(requestError, 'Не удалось загрузить места поездки.');
@@ -270,6 +358,7 @@ export const usePlacesStore = defineStore('places', () => {
       }
 
       places.value = sortPlaces([...places.value, normalizedPlace]);
+      upsertStoredPlacesForTrip(tripId, places.value);
       selectedPlaceId.value = normalizedPlace.uuid;
 
       return normalizedPlace;
@@ -299,6 +388,7 @@ export const usePlacesStore = defineStore('places', () => {
           ...places.value.filter((place) => place.uuid !== placeId),
           normalizedPlace,
         ]);
+        upsertStoredPlacesForTrip(tripId, places.value);
       }
 
       try {
@@ -360,6 +450,8 @@ export const usePlacesStore = defineStore('places', () => {
       } else {
         places.value = places.value.filter((place) => place.uuid !== placeId);
       }
+
+      upsertStoredPlacesForTrip(tripId, places.value);
 
       if (selectedPlaceId.value === placeId) {
         selectedPlaceId.value = null;

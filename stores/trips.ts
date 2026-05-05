@@ -1,7 +1,15 @@
 import { ref } from 'vue';
 import { defineStore } from 'pinia';
 import { useApiClient } from '~/composables/useApiClient';
-import type { CreateTripPayload, Trip, TripCreateResult, TripListItem, TripPace, TripShareResult, UpdateTripPayload } from '~/types/trip';
+import type {
+  CreateTripPayload,
+  Trip,
+  TripCreateResult,
+  TripListItem,
+  TripPace,
+  TripShareResult,
+  UpdateTripPayload,
+} from '~/types/trip';
 import { normalizeApiError } from '~/utils/apiError';
 
 type TripListResponse =
@@ -49,6 +57,9 @@ type ShareTripResponse =
   };
 
 const TRIP_PACES: TripPace[] = ['relaxed', 'moderate', 'intensive'];
+const TRIPS_STORAGE_KEY = 'poputno.trips';
+const TRIPS_REQUEST_TIMEOUT_MS = 3000;
+const SHARE_REQUEST_TIMEOUT_MS = 2500;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => (
   Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -90,15 +101,13 @@ const normalizeTripListItem = (value: unknown): TripListItem | null => {
     return null;
   }
 
-  const placesCount = typeof value.places_count === 'number' ? value.places_count : 0;
-
   return {
     uuid: value.uuid,
     title: value.title,
     city: value.city,
     date_from: value.date_from,
     date_to: value.date_to,
-    places_count: placesCount,
+    places_count: typeof value.places_count === 'number' ? value.places_count : 0,
     created_at: value.created_at,
   };
 };
@@ -150,17 +159,17 @@ const extractTrip = (payload: TripResponse): Trip | null => {
     return payload;
   }
 
-  if (isRecord(payload)) {
-    const candidates = [payload.trip, payload.result, payload.data];
+  if (!isRecord(payload)) {
+    return null;
+  }
 
-    for (const candidate of candidates) {
-      if (candidate === null) {
-        return null;
-      }
+  for (const candidate of [payload.trip, payload.result, payload.data]) {
+    if (candidate === null) {
+      return null;
+    }
 
-      if (isTrip(candidate)) {
-        return candidate;
-      }
+    if (isTrip(candidate)) {
+      return candidate;
     }
   }
 
@@ -174,21 +183,17 @@ const extractTripCreateResult = (payload: CreateTripResponse): TripCreateResult 
     return { uuid: trip.uuid };
   }
 
-  if (payload === null) {
+  if (payload === null || !isRecord(payload)) {
     return null;
   }
 
-  if (isRecord(payload)) {
-    if (typeof payload.uuid === 'string') {
-      return { uuid: payload.uuid };
-    }
+  if (typeof payload.uuid === 'string') {
+    return { uuid: payload.uuid };
+  }
 
-    const candidates = [payload.trip, payload.result, payload.data];
-
-    for (const candidate of candidates) {
-      if (isRecord(candidate) && typeof candidate.uuid === 'string') {
-        return { uuid: candidate.uuid };
-      }
+  for (const candidate of [payload.trip, payload.result, payload.data]) {
+    if (isRecord(candidate) && typeof candidate.uuid === 'string') {
+      return { uuid: candidate.uuid };
     }
   }
 
@@ -212,15 +217,11 @@ const extractTripShareResult = (payload: ShareTripResponse): TripShareResult | n
     return {
       uuid: trip.uuid,
       share_slug: trip.share_slug ?? null,
-      share_url: trip.share_slug ? null : null,
+      share_url: null,
     };
   }
 
-  if (payload === null) {
-    return null;
-  }
-
-  if (!isRecord(payload)) {
+  if (payload === null || !isRecord(payload)) {
     return null;
   }
 
@@ -265,6 +266,44 @@ const mergeTripWithPayload = (trip: Trip, payload: UpdateTripPayload): Trip => (
   updated_at: new Date().toISOString(),
 });
 
+const createTripFromPayload = (uuid: string, payload: CreateTripPayload): Trip => {
+  const timestamp = new Date().toISOString();
+
+  return {
+    uuid,
+    title: payload.title,
+    city: payload.city,
+    city_lat: payload.city_lat,
+    city_lng: payload.city_lng,
+    date_from: payload.date_from,
+    date_to: payload.date_to,
+    pace: payload.pace,
+    share_slug: null,
+    created_at: timestamp,
+    updated_at: timestamp,
+    places_count: 0,
+  };
+};
+
+const createTripFromListItem = (
+  listItem: TripListItem,
+  fallback?: Partial<Trip> | null,
+): Trip => ({
+  uuid: listItem.uuid,
+  title: listItem.title,
+  city: listItem.city,
+  city_lat: fallback?.city_lat,
+  city_lng: fallback?.city_lng,
+  date_from: listItem.date_from,
+  date_to: listItem.date_to,
+  pace: fallback?.pace ?? 'moderate',
+  share_slug: fallback?.share_slug ?? null,
+  created_at: listItem.created_at,
+  updated_at: fallback?.updated_at,
+  days_count: fallback?.days_count,
+  places_count: typeof fallback?.places_count === 'number' ? fallback.places_count : listItem.places_count,
+});
+
 const getTripsErrorMessage = (error: unknown, fallback: string): string => {
   const normalized = normalizeApiError(error, fallback);
 
@@ -281,7 +320,7 @@ const getTripsErrorMessage = (error: unknown, fallback: string): string => {
   }
 
   if (normalized.status === 422) {
-    return normalized.message || 'Проверьте введённые данные поездки.';
+    return normalized.message || 'Проверьте введенные данные поездки.';
   }
 
   return normalized.message || fallback;
@@ -301,6 +340,62 @@ export const useTripsStore = defineStore('trips', () => {
     error.value = null;
   };
 
+  const canUseStorage = () => import.meta.client && typeof window !== 'undefined';
+
+  const readStoredTrips = (): Trip[] => {
+    if (!canUseStorage()) {
+      return [];
+    }
+
+    try {
+      const rawValue = window.localStorage.getItem(TRIPS_STORAGE_KEY);
+
+      if (!rawValue) {
+        return [];
+      }
+
+      const parsedValue = JSON.parse(rawValue);
+
+      if (!Array.isArray(parsedValue)) {
+        return [];
+      }
+
+      return parsedValue.filter(isTrip);
+    } catch {
+      return [];
+    }
+  };
+
+  const writeStoredTrips = (nextTrips: Trip[]) => {
+    if (!canUseStorage()) {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(TRIPS_STORAGE_KEY, JSON.stringify(nextTrips));
+    } catch {
+      // Ignore storage errors and keep the app usable.
+    }
+  };
+
+  const upsertStoredTrip = (trip: Trip) => {
+    const storedTrips = readStoredTrips();
+    const existingIndex = storedTrips.findIndex((item) => item.uuid === trip.uuid);
+
+    if (existingIndex === -1) {
+      writeStoredTrips([trip, ...storedTrips]);
+      return;
+    }
+
+    const nextTrips = [...storedTrips];
+    nextTrips.splice(existingIndex, 1, trip);
+    writeStoredTrips(nextTrips);
+  };
+
+  const removeStoredTrip = (tripId: string) => {
+    writeStoredTrips(readStoredTrips().filter((trip) => trip.uuid !== tripId));
+  };
+
   const upsertTripInList = (trip: Trip) => {
     const listItem = toTripListItem(trip);
     const existingIndex = trips.value.findIndex((item) => item.uuid === trip.uuid);
@@ -315,6 +410,39 @@ export const useTripsStore = defineStore('trips', () => {
     trips.value = nextTrips;
   };
 
+  const applyStoredTripsToList = (): TripListItem[] => {
+    const storedTripItems = readStoredTrips().map(toTripListItem);
+    trips.value = storedTripItems;
+
+    return storedTripItems;
+  };
+
+  const applyStoredTripById = (tripId: string): Trip | null => {
+    const storedTrip = readStoredTrips().find((trip) => trip.uuid === tripId) ?? null;
+    currentTrip.value = storedTrip;
+
+    if (storedTrip) {
+      upsertTripInList(storedTrip);
+    }
+
+    return storedTrip;
+  };
+
+  const applyTripListFallbackById = (tripId: string): Trip | null => {
+    const listItem = trips.value.find((trip) => trip.uuid === tripId) ?? null;
+
+    if (!listItem) {
+      return null;
+    }
+
+    const storedTrip = readStoredTrips().find((trip) => trip.uuid === tripId) ?? null;
+    const fallbackTrip = createTripFromListItem(listItem, storedTrip);
+    currentTrip.value = fallbackTrip;
+    upsertStoredTrip(fallbackTrip);
+
+    return fallbackTrip;
+  };
+
   const fetchTrips = async (params?: { limit?: number; offset?: number }): Promise<TripListItem[]> => {
     isLoading.value = true;
     clearError();
@@ -323,21 +451,31 @@ export const useTripsStore = defineStore('trips', () => {
       const response = await apiFetch<TripListResponse>('/trips/', {
         method: 'GET',
         query: params,
+        timeout: TRIPS_REQUEST_TIMEOUT_MS,
       });
 
       const normalizedTrips = extractTripList(response);
 
-      if (!normalizedTrips.length && Array.isArray(response) && response.length > 0) {
-        error.value = 'Список поездок получен в неожиданном формате. Попробуйте обновить страницу позже.';
+      if (!normalizedTrips.length) {
+        const storedTrips = applyStoredTripsToList();
+
+        if (storedTrips.length) {
+          return storedTrips;
+        }
       }
 
       trips.value = normalizedTrips;
-
       return normalizedTrips;
     } catch (requestError) {
+      const storedTrips = applyStoredTripsToList();
+
+      if (storedTrips.length) {
+        error.value = null;
+        return storedTrips;
+      }
+
       trips.value = [];
       error.value = getTripsErrorMessage(requestError, 'Не удалось загрузить список поездок.');
-
       return [];
     } finally {
       isLoading.value = false;
@@ -352,22 +490,49 @@ export const useTripsStore = defineStore('trips', () => {
     try {
       const response = await apiFetch<TripResponse>(`/trips/${encodeURIComponent(tripId)}`, {
         method: 'GET',
+        timeout: TRIPS_REQUEST_TIMEOUT_MS,
       });
 
       const normalizedTrip = extractTrip(response);
 
       if (!normalizedTrip) {
-        error.value = 'Детали поездки пока недоступны. Попробуйте открыть её позже.';
+        const storedTrip = applyStoredTripById(tripId);
+
+        if (storedTrip) {
+          return storedTrip;
+        }
+
+        const tripListFallback = applyTripListFallbackById(tripId);
+
+        if (tripListFallback) {
+          return tripListFallback;
+        }
+
+        error.value = 'Детали поездки пока недоступны. Попробуйте открыть ее позже.';
         return null;
       }
 
       currentTrip.value = normalizedTrip;
       upsertTripInList(normalizedTrip);
+      upsertStoredTrip(normalizedTrip);
 
       return normalizedTrip;
     } catch (requestError) {
-      error.value = getTripsErrorMessage(requestError, 'Не удалось загрузить поездку.');
+      const storedTrip = applyStoredTripById(tripId);
 
+      if (storedTrip) {
+        error.value = null;
+        return storedTrip;
+      }
+
+      const tripListFallback = applyTripListFallbackById(tripId);
+
+      if (tripListFallback) {
+        error.value = null;
+        return tripListFallback;
+      }
+
+      error.value = getTripsErrorMessage(requestError, 'Не удалось загрузить поездку.');
       return null;
     } finally {
       isLoading.value = false;
@@ -388,19 +553,18 @@ export const useTripsStore = defineStore('trips', () => {
       const createdTrip = extractTripCreateResult(response);
 
       if (!createdTrip) {
-        error.value = 'Поездка создана, но ответ сервера пришёл в неполном формате.';
+        error.value = 'Поездка создана, но ответ сервера пришел в неполном формате.';
         return null;
       }
 
-      if (normalizedTrip) {
-        currentTrip.value = normalizedTrip;
-        upsertTripInList(normalizedTrip);
-      }
+      const nextTrip = normalizedTrip ?? createTripFromPayload(createdTrip.uuid, payload);
+      currentTrip.value = nextTrip;
+      upsertTripInList(nextTrip);
+      upsertStoredTrip(nextTrip);
 
       return createdTrip;
     } catch (requestError) {
       error.value = getTripsErrorMessage(requestError, 'Не удалось создать поездку.');
-
       return null;
     } finally {
       isCreating.value = false;
@@ -423,7 +587,7 @@ export const useTripsStore = defineStore('trips', () => {
         : null;
 
       if (!normalizedTrip && !fallbackTrip) {
-        error.value = 'Изменения сохранены, но обновлённые данные поездки пока недоступны.';
+        error.value = 'Изменения сохранены, но обновленные данные поездки пока недоступны.';
         return null;
       }
 
@@ -435,11 +599,11 @@ export const useTripsStore = defineStore('trips', () => {
 
       currentTrip.value = nextTrip;
       upsertTripInList(nextTrip);
+      upsertStoredTrip(nextTrip);
 
       return nextTrip;
     } catch (requestError) {
       error.value = getTripsErrorMessage(requestError, 'Не удалось обновить поездку.');
-
       return null;
     } finally {
       isLoading.value = false;
@@ -456,6 +620,7 @@ export const useTripsStore = defineStore('trips', () => {
       });
 
       trips.value = trips.value.filter((trip) => trip.uuid !== tripId);
+      removeStoredTrip(tripId);
 
       if (currentTrip.value?.uuid === tripId) {
         currentTrip.value = null;
@@ -464,7 +629,6 @@ export const useTripsStore = defineStore('trips', () => {
       return true;
     } catch (requestError) {
       error.value = getTripsErrorMessage(requestError, 'Не удалось удалить поездку.');
-
       return false;
     } finally {
       isLoading.value = false;
@@ -478,6 +642,7 @@ export const useTripsStore = defineStore('trips', () => {
     try {
       const response = await apiFetch<ShareTripResponse>(`/trips/${encodeURIComponent(tripId)}/share`, {
         method: 'POST',
+        timeout: SHARE_REQUEST_TIMEOUT_MS,
       });
 
       const normalizedTrip = extractTrip(response as TripResponse);
@@ -486,15 +651,17 @@ export const useTripsStore = defineStore('trips', () => {
       if (normalizedTrip) {
         currentTrip.value = normalizedTrip;
         upsertTripInList(normalizedTrip);
+        upsertStoredTrip(normalizedTrip);
       } else if (shareResult?.share_slug && currentTrip.value?.uuid === tripId) {
         currentTrip.value = {
           ...currentTrip.value,
           share_slug: shareResult.share_slug,
         };
+        upsertStoredTrip(currentTrip.value);
       }
 
       if (!shareResult) {
-        error.value = 'Ссылка для поездки создана, но ответ сервера пришёл в неполном формате.';
+        error.value = 'Ссылка для поездки создана, но ответ сервера пришел в неполном формате.';
         return null;
       }
 

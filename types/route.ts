@@ -16,6 +16,8 @@ export interface RouteDay {
 export interface RouteBuildResponse {
   trip_uuid?: string;
   days?: RouteDay[];
+  source?: string;
+  mode?: 'driving' | 'walking';
   [key: string]: unknown;
 }
 

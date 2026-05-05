@@ -2,9 +2,21 @@
   <header class="border-b border-[#e8dfd2] bg-[#fbf7f1]/95 backdrop-blur">
     <div class="mx-auto flex max-w-7xl items-center gap-4 px-4 py-4 sm:px-6 lg:px-8">
       <div class="min-w-0 flex-1">
-        <NuxtLink to="/app/trips" class="inline-flex items-center gap-3">
-          <span class="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#163b36] text-sm font-semibold text-white">
-            П
+<NuxtLink to="/app/trips" class="inline-flex items-center gap-3">
+          <span class="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#3f6df6] text-white shadow-[0_10px_24px_rgba(63,109,246,0.28)]">
+            <svg
+              aria-hidden="true"
+              class="h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+            >
+              <circle cx="12" cy="12" r="9" />
+              <path d="m15 9-2 6-4 2 2-6 4-2Z" />
+            </svg>
           </span>
 
           <p class="truncate text-lg font-semibold text-slate-950">

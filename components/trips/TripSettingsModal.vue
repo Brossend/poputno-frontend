@@ -1,18 +1,19 @@
 <template>
-  <transition
-    enter-active-class="transition duration-200 ease-out"
-    enter-from-class="opacity-0"
-    enter-to-class="opacity-100"
-    leave-active-class="transition duration-150 ease-in"
-    leave-from-class="opacity-100"
-    leave-to-class="opacity-0"
-  >
-    <div
-      v-if="modelValue"
-      class="fixed inset-0 z-[1100] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center"
-      @click.self="closeModal"
+  <Teleport to="body">
+    <transition
+      enter-active-class="transition duration-200 ease-out"
+      enter-from-class="opacity-0"
+      enter-to-class="opacity-100"
+      leave-active-class="transition duration-150 ease-in"
+      leave-from-class="opacity-100"
+      leave-to-class="opacity-0"
     >
-      <div class="w-full max-w-2xl overflow-hidden rounded-[32px] border border-slate-200 bg-white shadow-[0_32px_80px_rgba(15,23,42,0.22)]">
+      <div
+        v-if="modelValue"
+        class="fixed inset-0 z-[1100] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center"
+        @click.self="closeModal"
+      >
+        <div class="w-full max-w-2xl overflow-hidden rounded-[32px] border border-slate-200 bg-white shadow-[0_32px_80px_rgba(15,23,42,0.22)]">
         <div class="border-b border-slate-200 bg-gradient-to-r from-blue-50 via-white to-slate-50 px-5 py-5 sm:px-6">
           <div class="flex items-start justify-between gap-4">
             <div>
@@ -23,7 +24,7 @@
                 Настройки поездки
               </h2>
               <p class="mt-2 text-sm leading-6 text-slate-500">
-                Обновите основные параметры поездки. Изменённые поля отправятся на сервер одним PATCH-запросом.
+                Обновите основные параметры поездки.
               </p>
             </div>
 
@@ -180,8 +181,9 @@
           </div>
         </form>
       </div>
-    </div>
-  </transition>
+      </div>
+    </transition>
+  </Teleport>
 </template>
 
 <script setup lang="ts">

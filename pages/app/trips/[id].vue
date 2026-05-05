@@ -4,6 +4,7 @@
       :trip="currentTrip"
       :places-count="places.length"
       :days-count="resolvedDaysCount"
+      :route-mode="routeMode"
       :can-build-route="canBuildRoute"
       :is-building-route="isBuildingRoute"
       :can-open-settings="canOpenTripSettings"
@@ -12,6 +13,7 @@
       @build-route="handleBuildRoute"
       @open-settings="openTripSettings"
       @share-trip="handleShareTrip"
+      @update:route-mode="routeMode = $event"
     />
 
     <TripSettingsModal
@@ -22,6 +24,12 @@
       @submit="handleTripSettingsSubmit"
     />
 
+    <ShareLinkModal
+      v-model="isShareLinkModalOpen"
+      :link="shareLink || ''"
+      :message="shareMessage"
+    />
+
     <div
       v-if="shareError"
       class="rounded-[28px] border border-rose-200 bg-rose-50 px-5 py-4 text-sm leading-6 text-rose-900"
@@ -30,7 +38,7 @@
     </div>
 
     <div
-      v-else-if="shareLink"
+      v-else-if="shareLink && !isShareLinkModalOpen"
       class="rounded-[28px] border border-blue-100 bg-blue-50/80 px-5 py-5 shadow-[0_16px_40px_rgba(37,99,235,0.08)]"
     >
       <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -80,10 +88,10 @@
     </div>
 
     <div
-      v-else-if="routeWarningMessage"
+      v-else-if="routeWarningMessageForMode"
       class="rounded-[28px] border border-amber-200 bg-amber-50 px-5 py-4 text-sm leading-6 text-amber-900"
     >
-      {{ routeWarningMessage }}
+      {{ routeWarningMessageForMode }}
     </div>
 
     <div
@@ -95,8 +103,8 @@
           <p class="text-xs font-semibold uppercase tracking-[0.18em] text-blue-600">
             Маршрут готов
           </p>
-          <p class="mt-2 text-sm leading-6 text-slate-600">
-            {{ routeSummaryDescription }}
+          <p v-if="routeSummaryDescriptionForMode" class="mt-2 text-sm leading-6 text-slate-600">
+            {{ routeSummaryDescriptionForMode }}
           </p>
         </div>
 
@@ -174,6 +182,8 @@
           <TripMap
             class="h-[480px] lg:h-[min(70vh,52rem)]"
             :center="mapCenter"
+            :city-name="currentTrip?.city"
+            :has-explicit-center="typeof currentTrip?.city_lat === 'number' && typeof currentTrip?.city_lng === 'number'"
             :places="places"
             :selected-place-id="selectedPlaceId"
             :route-segments="routeSegments"
@@ -193,18 +203,24 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import PlaceSearchPanel from '~/components/map/PlaceSearchPanel.vue';
 import TripMap from '~/components/map/TripMap.vue';
 import TripDaysSidebar from '~/components/trips/TripDaysSidebar.vue';
 import TripEditorHeader from '~/components/trips/TripEditorHeader.vue';
+import ShareLinkModal from '~/components/trips/ShareLinkModal.vue';
 import TripSettingsModal from '~/components/trips/TripSettingsModal.vue';
 import { usePlacesStore } from '~/stores/places';
 import { useRouteStore } from '~/stores/route';
 import { useTripsStore } from '~/stores/trips';
 import type { RouteMapSegment } from '~/types/route';
-import type { TripShareResult, UpdateTripPayload } from '~/types/trip';
+import type { Trip, TripShareResult, UpdateTripPayload } from '~/types/trip';
+import {
+  buildSharedTripSnapshot,
+  buildLocalSharedRoute,
+  createEncryptedFallbackShareUrl,
+} from '~/utils/fallbackShare';
 
 definePageMeta({
   layout: 'app',
@@ -237,7 +253,9 @@ const {
 } = storeToRefs(routeStore);
 
 const mobileView = ref<'map' | 'days'>('map');
+const routeMode = ref<'driving' | 'walking'>('driving');
 const isTripSettingsOpen = ref(false);
+const isShareLinkModalOpen = ref(false);
 const isSavingTripSettings = ref(false);
 const tripSettingsSubmitError = ref<string | null>(null);
 const shareLink = ref<string | null>(null);
@@ -282,7 +300,7 @@ const resolvedDaysCount = computed(() => {
 });
 
 const dayGroups = computed(() => placesByDay.value);
-const canBuildRoute = computed(() => Boolean(tripId.value) && places.value.length >= 2);
+const canBuildRoute = computed(() => Boolean(tripId.value));
 const canOpenTripSettings = computed(() => Boolean(tripId.value && currentTrip.value));
 const canShareTrip = computed(() => Boolean(tripId.value));
 const isMutatingPlaces = computed(() => isDeletingPlace.value || isUpdatingPlace.value);
@@ -304,10 +322,6 @@ const searchCenter = computed(() => (
 const tripInfoMessage = computed(() => {
   if (!currentTrip.value && tripError.value) {
     return `${tripError.value} Мы всё равно загрузили рабочий экран и оставили карту с безопасным центром, чтобы архитектура была готова к полному ответу API.`;
-  }
-
-  if (currentTrip.value && (typeof currentTrip.value.city_lat !== 'number' || typeof currentTrip.value.city_lng !== 'number')) {
-    return 'Координаты города в ответе поездки пока не пришли, поэтому карта открыта с запасным центром на Москве. Когда backend начнёт отдавать city_lat и city_lng, карта автоматически будет центрироваться по поездке.';
   }
 
   return null;
@@ -408,10 +422,52 @@ const hasServerGeometry = computed(() => routeSegments.value.some((segment) => !
 const usesFallbackGeometry = computed(() => builtRoute.value !== null && (
   routeSegments.value.some((segment) => segment.isFallback) || !hasServerGeometry.value
 ));
+const usesLocalRouteFallback = computed(() => builtRoute.value?.source === 'local');
+const usesRoadRouteFallback = computed(() => builtRoute.value?.source === 'osrm');
+const usesStraightLineFallback = computed(() => builtRoute.value?.source === 'local-straight');
+const activeRouteMode = computed(() => builtRoute.value?.mode ?? routeMode.value);
+
+const routeWarningMessageForMode = computed(() => {
+  if (!builtRoute.value || !usesFallbackGeometry.value) {
+    return null;
+  }
+
+  if (usesRoadRouteFallback.value) {
+    return activeRouteMode.value === 'walking'
+      ? 'Backend не ответил, поэтому сейчас показываем пеший маршрут через публичный OSM-routing fallback.'
+      : 'Backend не ответил, поэтому сейчас показываем автомобильный маршрут через публичный OSM-routing fallback.';
+  }
+
+  return routeWarningMessage.value;
+});
+
+const routeSummaryDescriptionForMode = computed(() => {
+  if (!builtRoute.value) {
+    return '';
+  }
+
+  if (usesRoadRouteFallback.value) {
+    return '';
+  }
+
+  return routeSummaryDescription.value;
+});
 
 const routeWarningMessage = computed(() => {
   if (!builtRoute.value || !usesFallbackGeometry.value) {
     return null;
+  }
+
+  if (usesRoadRouteFallback.value) {
+    return 'Backend не ответил, поэтому сейчас показываем маршрут по дорогам через публичный OSM-routing fallback.';
+  }
+
+  if (usesStraightLineFallback.value) {
+    return 'Сервер не построил маршрут, поэтому сейчас показываем упрощенный локальный вариант прямыми линиями между местами.';
+  }
+
+  if (usesLocalRouteFallback.value) {
+    return 'Сервер не построил маршрут, поэтому сейчас показываем локальный вариант по порядку мест в поездке.';
   }
 
   if (hasServerGeometry.value) {
@@ -465,6 +521,18 @@ const routeSummaryDescription = computed(() => {
     return 'Сервер принял запрос на построение маршрута. Как только в ответ начнёт приходить геометрия линии, карта автоматически отрисует маршрут поверх мест поездки.';
   }
 
+  if (usesRoadRouteFallback.value) {
+    return 'Маршрут собран на фронтенде через публичный OSM-routing сервис. Когда backend снова начнет отвечать, карта автоматически подхватит серверный вариант.';
+  }
+
+  if (usesStraightLineFallback.value) {
+    return 'Маршрут собран локально без дорожного графа, поэтому сейчас на карте показаны прямые отрезки между местами.';
+  }
+
+  if (usesLocalRouteFallback.value) {
+    return 'Маршрут собран локально на фронтенде по текущему порядку мест. Когда backend снова начнет отвечать, карта автоматически подхватит серверный вариант.';
+  }
+
   if (usesFallbackGeometry.value) {
     return 'Линия маршрута уже показана на карте. Когда сервер начнёт отдавать полную геометрию, она автоматически заменит временные прямые отрезки.';
   }
@@ -481,6 +549,7 @@ const clearShareState = () => {
   shareLink.value = null;
   shareMessage.value = null;
   shareError.value = null;
+  isShareLinkModalOpen.value = false;
 };
 
 const buildShareLink = (shareResult: TripShareResult) => {
@@ -502,17 +571,89 @@ const buildShareLink = (shareResult: TripShareResult) => {
   return `${window.location.origin}${basePath}`;
 };
 
+const createFallbackShareLink = async () => {
+  if (!import.meta.client || !tripId.value) {
+    return null;
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const tripForShare: Trip = currentTrip.value ?? {
+    uuid: tripId.value,
+    title: 'Поездка',
+    city: '',
+    date_from: today,
+    date_to: today,
+    pace: 'moderate',
+    share_slug: null,
+    created_at: new Date().toISOString(),
+    days_count: resolvedDaysCount.value,
+    places_count: places.value.length,
+  };
+  const routeForShare = builtRoute.value ?? (
+    tripId.value
+      ? buildLocalSharedRoute(tripId.value, places.value, routeMode.value)
+      : null
+  );
+
+  const shareSnapshot = buildSharedTripSnapshot(
+    tripForShare,
+    places.value,
+    routeForShare
+      ? {
+        ...routeForShare,
+        mode: routeForShare.mode ?? routeMode.value,
+      }
+      : null,
+  );
+
+  return createEncryptedFallbackShareUrl(shareSnapshot, window.location.origin);
+};
+
 const copyShareLink = async () => {
-  if (!shareLink.value || !import.meta.client || !navigator.clipboard) {
+  if (!shareLink.value || !import.meta.client) {
     return;
   }
 
   try {
+    if (!navigator.clipboard?.writeText) {
+      throw new Error('Clipboard API is unavailable.');
+    }
+
     await navigator.clipboard.writeText(shareLink.value);
     shareMessage.value = 'Ссылка скопирована. Другой пользователь сможет открыть её и добавить поездку себе.';
   } catch {
-    shareMessage.value = 'Ссылка готова. Если копирование не сработало автоматически, можно скопировать её вручную.';
+    try {
+      const textArea = window.document.createElement('textarea');
+      textArea.value = shareLink.value;
+      textArea.setAttribute('readonly', '');
+      textArea.style.position = 'fixed';
+      textArea.style.opacity = '0';
+      textArea.style.pointerEvents = 'none';
+      textArea.style.top = '0';
+      textArea.style.left = '0';
+      window.document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      textArea.setSelectionRange(0, textArea.value.length);
+
+      const copied = window.document.execCommand('copy');
+      window.document.body.removeChild(textArea);
+
+      shareMessage.value = copied
+        ? 'Ссылка скопирована. Другой пользователь сможет открыть её и добавить поездку себе.'
+        : 'Ссылка готова. Если копирование не сработало автоматически, можно скопировать её вручную.';
+    } catch {
+      shareMessage.value = 'Ссылка готова. Если копирование не сработало автоматически, можно скопировать её вручную.';
+    }
   }
+};
+
+const openShareModal = async (link: string, message: string) => {
+  shareError.value = null;
+  shareLink.value = link;
+  shareMessage.value = message;
+  isShareLinkModalOpen.value = true;
+  await nextTick();
 };
 
 const loadEditorData = async () => {
@@ -590,38 +731,66 @@ const handleShareTrip = async () => {
 
   clearShareState();
   tripsStore.clearError();
+  isShareLinkModalOpen.value = true;
+  shareMessage.value = 'Готовим ссылку...';
 
-  const shareResult = await tripsStore.shareTrip(tripId.value);
+  try {
+    const fallbackShareLink = await createFallbackShareLink();
 
-  if (!shareResult) {
-    shareError.value = tripError.value || tripsStore.error || 'Не удалось подготовить ссылку на поездку.';
-    return;
+    if (fallbackShareLink) {
+      await openShareModal(
+        fallbackShareLink,
+        'Ссылка готова. Можно сразу скопировать и отправить.',
+      );
+    }
+
+    const shareResult = await tripsStore.shareTrip(tripId.value);
+
+    if (!shareResult) {
+      if (fallbackShareLink) {
+        return;
+      }
+
+      shareMessage.value = tripError.value || tripsStore.error || 'Не удалось подготовить ссылку на поездку.';
+      return;
+    }
+
+    const nextShareLink = buildShareLink(shareResult);
+
+    if (!nextShareLink) {
+      if (fallbackShareLink) {
+        return;
+      }
+
+      shareMessage.value = 'Ссылка на поездку подготовлена, но не удалось собрать адрес для отправки.';
+      return;
+    }
+
+    await openShareModal(
+      nextShareLink,
+      'Ссылка готова. Можно сразу скопировать и отправить.',
+    );
+  } catch {
+    if (shareLink.value) {
+      isShareLinkModalOpen.value = true;
+      return;
+    }
+
+    isShareLinkModalOpen.value = true;
+    shareMessage.value = 'Не удалось подготовить ссылку на поездку.';
   }
-
-  const nextShareLink = buildShareLink(shareResult);
-
-  if (!nextShareLink) {
-    shareError.value = 'Ссылка на поездку подготовлена, но не удалось собрать адрес для отправки.';
-    return;
-  }
-
-  shareLink.value = nextShareLink;
-
-  if (shareResult.share_slug || shareResult.share_url) {
-    shareMessage.value = 'Ссылка готова. Другой пользователь сможет открыть её и добавить поездку себе.';
-  } else {
-    shareMessage.value = 'Ссылка собрана по UUID поездки. Как только backend начнет отдавать slug или готовый URL, этот экран автоматически подхватит их.';
-  }
-
-  await copyShareLink();
 };
 
 const handleBuildRoute = async () => {
-  if (!tripId.value || !canBuildRoute.value) {
+  if (!tripId.value) {
     return;
   }
 
-  await routeStore.buildRoute(tripId.value);
+  if (places.value.length < 2 && !placesLoading.value) {
+    await placesStore.fetchPlaces(tripId.value);
+  }
+
+  await routeStore.buildRoute(tripId.value, routeMode.value);
 };
 
 const openTripSettings = () => {
